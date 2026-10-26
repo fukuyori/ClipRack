@@ -66,6 +66,7 @@ public partial class MainWindow : Window
     public void RestoreFromTray()
     {
         var restoreState = lastNonMinimizedState;
+        var historyWasAlreadySelected = ReferenceEquals(MainTabs.SelectedItem, HistoryTab);
         var anchor = restoreState == WindowState.Maximized
             ? (System.Windows.Point?)null
             : WindowPlacementService.GetAnchor(PreferCaretForWindowPlacement);
@@ -75,6 +76,7 @@ public partial class MainWindow : Window
         ShowInTaskbar = true;
         if (!IsVisible) Show();
         Activate();
+        if (historyWasAlreadySelected) _ = RefreshHistoryAsync();
     }
 
     public void ReportClipboardNormalizerStatus(string message)
@@ -113,6 +115,13 @@ public partial class MainWindow : Window
     }
 
     private async void RefreshHistory_Click(object sender, RoutedEventArgs e) => await RefreshHistoryAsync();
+
+    private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || !ReferenceEquals(e.OriginalSource, MainTabs)) return;
+        if (ReferenceEquals(MainTabs.SelectedItem, HistoryTab))
+            await RefreshHistoryAsync();
+    }
 
     private async Task RefreshHistoryAsync()
     {

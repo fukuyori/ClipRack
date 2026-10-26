@@ -15,8 +15,8 @@
             <TextBlock Text="ClipRack" FontSize="24" FontWeight="SemiBold" />
             <TextBlock Text="{DynamicResource Text.Subtitle}" Foreground="{DynamicResource SecondaryTextBrush}" />
         </StackPanel>
-        <TabControl x:Name="MainTabs" Grid.Row="1">
-            <TabItem Header="{DynamicResource Text.History}">
+        <TabControl x:Name="MainTabs" Grid.Row="1" SelectionChanged="MainTabs_SelectionChanged">
+            <TabItem x:Name="HistoryTab" Header="{DynamicResource Text.History}">
                 <Grid Margin="12">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
