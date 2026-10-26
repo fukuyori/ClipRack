@@ -1,0 +1,20 @@
+# .NET / Visual Studio build outputs
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.sln.docstates
+TestResults/
+
+# ClipRack release outputs
+artifacts/
+installer_output/
+
+# IDE and local tooling
+.idea/
+*.cache
+
+# Local clipboard samples
+貼り付けテキスト.txt
+貼り付けテキスト (2).txt
