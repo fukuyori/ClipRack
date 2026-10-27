@@ -11,6 +11,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using WinClipboard = Windows.ApplicationModel.DataTransfer.Clipboard;
 
 namespace Clippy;
@@ -28,6 +29,13 @@ public partial class MainWindow : Window
     private bool updatingMacroName;
     private WindowState lastNonMinimizedState = WindowState.Normal;
     private IntPtr pasteTargetWindow;
+    private readonly DispatcherTimer historyRefreshTimer;
+    private bool historyRefreshPending;
+    private bool historyRefreshRunning;
+    private bool historyFullReloadPending;
+    private readonly ObservableCollection<HistoryEntry> historyEntries = [];
+    private readonly HashSet<string> unsupportedHistoryIds = [];
+    private ContextMenu? openHistoryMenu;
 
     public string ConfiguredHotkey => settings.ActivationHotkey;
     public bool PreferCaretForWindowPlacement => settings.WindowPlacement != "Mouse";
@@ -41,6 +49,10 @@ public partial class MainWindow : Window
         PopulateSettingsControls();
         foreach (var macro in settingsStore.LoadMacros()) macros.Add(macro);
         MacroList.ItemsSource = macros;
+        HistoryList.ItemsSource = historyEntries;
+        historyRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        historyRefreshTimer.Tick += HistoryRefreshTimer_Tick;
+        WinClipboard.HistoryChanged += OnClipboardHistoryChanged;
         Loaded += async (_, _) => await RefreshHistoryAsync();
     }
 
@@ -114,6 +126,8 @@ public partial class MainWindow : Window
     {
         if (Application.Current is App { IsExiting: true } app)
         {
+            WinClipboard.HistoryChanged -= OnClipboardHistoryChanged;
+            historyRefreshTimer.Stop();
             app.StopClipboardTextAutoNormalizer();
             return;
         }
@@ -122,7 +136,7 @@ public partial class MainWindow : Window
         HideToTray();
     }
 
-    private async void RefreshHistory_Click(object sender, RoutedEventArgs e) => await RefreshHistoryAsync();
+    private async void RefreshHistory_Click(object sender, RoutedEventArgs e) => await RefreshHistoryAsync(fullReload: true);
 
     private async void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -131,14 +145,61 @@ public partial class MainWindow : Window
             await RefreshHistoryAsync();
     }
 
-    private async Task RefreshHistoryAsync()
+    private void OnClipboardHistoryChanged(object? sender, ClipboardHistoryChangedEventArgs e) =>
+        Dispatcher.InvokeAsync(ScheduleHistoryRefresh);
+
+    // Coalesce bursts of history notifications and defer them while the history cannot be refreshed safely.
+    private void ScheduleHistoryRefresh()
     {
-        HistoryStatus.Text = LocalizationManager.T("HistoryLoading");
+        historyRefreshPending = true;
+        historyRefreshTimer.Stop();
+        if (CanRefreshHistoryNow()) historyRefreshTimer.Start();
+    }
+
+    private bool CanRefreshHistoryNow() =>
+        IsVisible && WindowState != WindowState.Minimized &&
+        ReferenceEquals(MainTabs.SelectedItem, HistoryTab) && openHistoryMenu is null;
+
+    private async void HistoryRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        historyRefreshTimer.Stop();
+        if (CanRefreshHistoryNow()) await RefreshHistoryAsync(historyFullReloadPending);
+    }
+
+    // Reads only the content of history items that are not shown yet; existing cards are reused by history item ID.
+    private async Task RefreshHistoryAsync(bool fullReload = false)
+    {
+        if (historyRefreshRunning)
+        {
+            historyRefreshPending = true;
+            historyFullReloadPending |= fullReload;
+            return;
+        }
+
+        historyRefreshRunning = true;
+        historyRefreshPending = false;
+        historyFullReloadPending = false;
+        try
+        {
+            await LoadHistoryAsync(fullReload);
+        }
+        finally
+        {
+            historyRefreshRunning = false;
+            if (historyRefreshPending) ScheduleHistoryRefresh();
+        }
+    }
+
+    private async Task LoadHistoryAsync(bool fullReload)
+    {
+        if (fullReload || historyEntries.Count == 0)
+            HistoryStatus.Text = LocalizationManager.T("HistoryLoading");
         try
         {
             if (!WinClipboard.IsHistoryEnabled())
             {
-                HistoryList.ItemsSource = null;
+                historyEntries.Clear();
+                unsupportedHistoryIds.Clear();
                 HistoryStatus.Text = LocalizationManager.T("HistoryDisabled");
                 return;
             }
@@ -150,28 +211,58 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (fullReload) unsupportedHistoryIds.Clear();
+            var existing = fullReload ? new Dictionary<string, HistoryEntry>() : historyEntries.ToDictionary(entry => entry.Item.Id);
+            var currentIds = new HashSet<string>();
             var entries = new List<HistoryEntry>();
             foreach (var item in result.Items)
             {
+                currentIds.Add(item.Id);
+                if (existing.TryGetValue(item.Id, out var cached))
+                {
+                    cached.Item = item;
+                    entries.Add(cached);
+                    continue;
+                }
+                if (unsupportedHistoryIds.Contains(item.Id)) continue;
+
                 try
                 {
                     var text = await ReadTextAsync(item.Content);
                     var thumbnail = text is null ? await ReadThumbnailAsync(item.Content) : null;
-                    if (text is null && thumbnail is null) continue;
+                    if (text is null && thumbnail is null)
+                    {
+                        unsupportedHistoryIds.Add(item.Id);
+                        continue;
+                    }
                     entries.Add(new HistoryEntry(item, text, thumbnail));
                 }
                 catch
                 {
-                    // One unavailable history item must not prevent the other text entries from loading.
+                    // One unavailable history item must not prevent the other entries from loading; it is retried next time.
                 }
             }
-            HistoryList.ItemsSource = entries;
-            HistoryStatus.Text = LocalizationManager.Format("HistoryCount", entries.Count);
+            unsupportedHistoryIds.IntersectWith(currentIds);
+            SyncHistoryEntries(entries);
+            HistoryStatus.Text = LocalizationManager.Format("HistoryCount", historyEntries.Count);
         }
         catch (Exception ex)
         {
             HistoryStatus.Text = LocalizationManager.Format("HistoryError", ex.Message);
         }
+    }
+
+    // Applies only insertions, moves, and removals so the selection and scroll position stay in place.
+    private void SyncHistoryEntries(IReadOnlyList<HistoryEntry> entries)
+    {
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (i < historyEntries.Count && ReferenceEquals(historyEntries[i], entries[i])) continue;
+            var currentIndex = historyEntries.IndexOf(entries[i]);
+            if (currentIndex >= 0) historyEntries.Move(currentIndex, i);
+            else historyEntries.Insert(i, entries[i]);
+        }
+        while (historyEntries.Count > entries.Count) historyEntries.RemoveAt(historyEntries.Count - 1);
     }
 
     private static async Task<string?> ReadTextAsync(DataPackageView content)
@@ -271,6 +362,12 @@ public partial class MainWindow : Window
             }
         }
 
+        openHistoryMenu = contextMenu;
+        contextMenu.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(openHistoryMenu, contextMenu)) openHistoryMenu = null;
+            if (historyRefreshPending) ScheduleHistoryRefresh();
+        };
         contextMenu.PlacementTarget = placementTarget;
         contextMenu.Placement = placementTarget is ListBoxItem ? PlacementMode.MousePoint : PlacementMode.Bottom;
         contextMenu.IsOpen = true;
@@ -705,7 +802,7 @@ public partial class MainWindow : Window
 
     private sealed class HistoryEntry(ClipboardHistoryItem item, string? text, BitmapSource? thumbnail)
     {
-        public ClipboardHistoryItem Item { get; } = item;
+        public ClipboardHistoryItem Item { get; set; } = item;
         public string? Text { get; } = text;
         public BitmapSource? Thumbnail { get; } = thumbnail;
         public DateTimeOffset Timestamp => Item.Timestamp;
