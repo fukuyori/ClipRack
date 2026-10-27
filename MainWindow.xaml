@@ -27,12 +27,80 @@
                         <TextBlock x:Name="HistoryStatus" Margin="12,6,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
                     </DockPanel>
                     <ListBox x:Name="HistoryList" Grid.Row="1" SelectionChanged="HistoryList_SelectionChanged"
-                             DisplayMemberPath="DisplayText">
+                             HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.CanContentScroll="False" Padding="4">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
+                                <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+                                <Setter Property="Background" Value="{DynamicResource ControlBackgroundBrush}" />
+                                <Setter Property="BorderBrush" Value="Transparent" />
+                                <Setter Property="Margin" Value="4,4,4,4" />
+                                <Setter Property="Padding" Value="12,10,6,10" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Card" Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="2"
+                                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource HoverBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{DynamicResource TextBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
                                 <EventSetter Event="PreviewMouseRightButtonDown" Handler="HistoryItem_PreviewMouseRightButtonDown" />
                             </Style>
                         </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock x:Name="PreviewTextBlock" Text="{Binding PreviewText}" TextWrapping="Wrap"
+                                                   TextTrimming="CharacterEllipsis" LineStackingStrategy="BlockLineHeight"
+                                                   LineHeight="20" MaxHeight="60" />
+                                        <Image x:Name="ThumbnailImage" Source="{Binding Thumbnail}" MaxHeight="120"
+                                               HorizontalAlignment="Left" Stretch="Uniform" StretchDirection="DownOnly" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="⋯" VerticalAlignment="Top" Margin="8,-4,0,0"
+                                            Width="28" Height="24" Click="HistoryMenuButton_Click"
+                                            ToolTip="{DynamicResource Text.HistoryMenu}" Cursor="Hand">
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border x:Name="MenuButtonBorder" Background="Transparent" CornerRadius="4">
+                                                    <TextBlock Text="{TemplateBinding Content}" FontSize="14"
+                                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource SecondaryTextBrush}" />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="MenuButtonBorder" Property="Background" Value="{DynamicResource SelectionBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+                                </Grid>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding PreviewText}" Value="{x:Null}">
+                                        <Setter TargetName="PreviewTextBlock" Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
+                                        <Setter TargetName="ThumbnailImage" Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
                     </ListBox>
                 </Grid>
             </TabItem>

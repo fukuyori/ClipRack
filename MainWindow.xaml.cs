@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using Clippy.Models;
@@ -6,7 +7,10 @@ using Clippy.Services;
 using Windows.ApplicationModel.DataTransfer;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media.Imaging;
 using WinClipboard = Windows.ApplicationModel.DataTransfer.Clipboard;
 
 namespace Clippy;
@@ -23,6 +27,7 @@ public partial class MainWindow : Window
     private bool macroChangesPending;
     private bool updatingMacroName;
     private WindowState lastNonMinimizedState = WindowState.Normal;
+    private IntPtr pasteTargetWindow;
 
     public string ConfiguredHotkey => settings.ActivationHotkey;
     public bool PreferCaretForWindowPlacement => settings.WindowPlacement != "Mouse";
@@ -73,6 +78,9 @@ public partial class MainWindow : Window
         WindowState = restoreState;
         if (anchor is { } position) WindowPlacementService.PlaceNearAnchor(this, position);
         MainTabs.SelectedIndex = 0;
+        // Remember the window the user was working in so a history item can be pasted back into it.
+        var foreground = PasteService.GetForegroundWindowHandle();
+        if (foreground != new WindowInteropHelper(this).Handle) pasteTargetWindow = foreground;
         ShowInTaskbar = true;
         if (!IsVisible) Show();
         Activate();
@@ -148,8 +156,9 @@ public partial class MainWindow : Window
                 try
                 {
                     var text = await ReadTextAsync(item.Content);
-                    if (text is null) continue;
-                    entries.Add(new HistoryEntry(item, text));
+                    var thumbnail = text is null ? await ReadThumbnailAsync(item.Content) : null;
+                    if (text is null && thumbnail is null) continue;
+                    entries.Add(new HistoryEntry(item, text, thumbnail));
                 }
                 catch
                 {
@@ -182,10 +191,34 @@ public partial class MainWindow : Window
         return null;
     }
 
+    private static async Task<BitmapSource?> ReadThumbnailAsync(DataPackageView content)
+    {
+        if (!content.Contains(StandardDataFormats.Bitmap)) return null;
+        try
+        {
+            var reference = await content.GetBitmapAsync();
+            using var winRtStream = await reference.OpenReadAsync();
+            using var stream = winRtStream.AsStreamForRead();
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.DecodePixelHeight = 240;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            // An undecodable image is treated the same as an unsupported history item.
+            return null;
+        }
+    }
+
     private async void HistoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (HistoryList.SelectedItem is not HistoryEntry entry) return;
-        TextEditor.Text = entry.Text;
+        if (HistoryList.SelectedItem is not HistoryEntry { Text: { } text } entry) return;
+        TextEditor.Text = text;
         EditStatus.Text = LocalizationManager.Format("LoadedHistory", entry.Timestamp.LocalDateTime.ToString("G"));
         await Task.CompletedTask;
     }
@@ -193,11 +226,38 @@ public partial class MainWindow : Window
     private void HistoryItem_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ListBoxItem item || item.DataContext is not HistoryEntry entry) return;
+        ShowHistoryMenu(entry, item);
+        e.Handled = true;
+    }
 
+    private void HistoryMenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: HistoryEntry entry } button) return;
+        ShowHistoryMenu(entry, button);
+        e.Handled = true;
+    }
+
+    private void ShowHistoryMenu(HistoryEntry entry, UIElement placementTarget)
+    {
         HistoryList.SelectedItem = entry;
         var contextMenu = new ContextMenu();
+        if (entry.HasFormatting)
+        {
+            AddPasteMenuItem(contextMenu, entry, "PasteFormatted", keepFormatting: true);
+            AddPasteMenuItem(contextMenu, entry, "PastePlain", keepFormatting: false);
+        }
+        else
+        {
+            AddPasteMenuItem(contextMenu, entry, "Paste", keepFormatting: true);
+        }
+        contextMenu.Items.Add(new Separator());
+
         var savedMacros = settingsStore.LoadMacros();
-        if (savedMacros.Count == 0)
+        if (entry.Text is not { } text)
+        {
+            contextMenu.Items.Add(new MenuItem { Header = LocalizationManager.T("MacroTextOnly"), IsEnabled = false });
+        }
+        else if (savedMacros.Count == 0)
         {
             contextMenu.Items.Add(new MenuItem { Header = LocalizationManager.T("NoMacros"), IsEnabled = false });
         }
@@ -206,21 +266,50 @@ public partial class MainWindow : Window
             foreach (var macro in savedMacros)
             {
                 var menuItem = new MenuItem { Header = macro.Name };
-                menuItem.Click += async (_, _) => await ApplyMacroToHistoryAsync(entry, macro);
+                menuItem.Click += async (_, _) => await ApplyMacroToHistoryAsync(text, macro);
                 contextMenu.Items.Add(menuItem);
             }
         }
 
-        contextMenu.PlacementTarget = item;
+        contextMenu.PlacementTarget = placementTarget;
+        contextMenu.Placement = placementTarget is ListBoxItem ? PlacementMode.MousePoint : PlacementMode.Bottom;
         contextMenu.IsOpen = true;
-        e.Handled = true;
     }
 
-    private async Task ApplyMacroToHistoryAsync(HistoryEntry entry, TextMacro macro)
+    private void AddPasteMenuItem(ContextMenu contextMenu, HistoryEntry entry, string headerKey, bool keepFormatting)
+    {
+        var menuItem = new MenuItem { Header = LocalizationManager.T(headerKey) };
+        menuItem.Click += async (_, _) => await PasteHistoryAsync(entry, keepFormatting);
+        contextMenu.Items.Add(menuItem);
+    }
+
+    private async Task PasteHistoryAsync(HistoryEntry entry, bool keepFormatting)
     {
         try
         {
-            var transformedText = transforms.ApplyMacro(entry.Text, macro);
+            var data = await PasteService.CreatePackageAsync(entry.Item.Content, entry.Text, keepFormatting);
+            PasteService.SetClipboardWithoutHistory(data);
+            if (!PasteService.IsAvailableTarget(pasteTargetWindow))
+            {
+                HistoryStatus.Text = LocalizationManager.T("PasteNoTarget");
+                return;
+            }
+
+            HideToTray();
+            if (!await PasteService.PasteToWindowAsync(pasteTargetWindow))
+                ReportClipboardNormalizerStatus(LocalizationManager.T("PasteSendFailed"));
+        }
+        catch (Exception ex)
+        {
+            HistoryStatus.Text = LocalizationManager.Format("PasteError", ex.Message);
+        }
+    }
+
+    private async Task ApplyMacroToHistoryAsync(string text, TextMacro macro)
+    {
+        try
+        {
+            var transformedText = transforms.ApplyMacro(text, macro);
             var data = new DataPackage();
             data.SetText(transformedText);
             WinClipboard.SetContent(data);
@@ -236,7 +325,7 @@ public partial class MainWindow : Window
 
     private void LoadSelectedHistory_Click(object sender, RoutedEventArgs e)
     {
-        if (HistoryList.SelectedItem is HistoryEntry entry) TextEditor.Text = entry.Text;
+        if (HistoryList.SelectedItem is HistoryEntry { Text: { } text }) TextEditor.Text = text;
         else EditStatus.Text = LocalizationManager.T("SelectHistory");
     }
 
@@ -522,9 +611,9 @@ public partial class MainWindow : Window
 
     private void LoadSelectedTranslation_Click(object sender, RoutedEventArgs e)
     {
-        if (HistoryList.SelectedItem is HistoryEntry entry)
+        if (HistoryList.SelectedItem is HistoryEntry { Text: { } text })
         {
-            TranslationSource.Text = entry.Text;
+            TranslationSource.Text = text;
             TranslationStatus.Text = LocalizationManager.T("TranslationLoaded");
         }
         else TranslationStatus.Text = LocalizationManager.T("SelectHistory");
@@ -614,17 +703,21 @@ public partial class MainWindow : Window
 
     private void ClearHotkey_Click(object sender, RoutedEventArgs e) => HotkeySetting.Clear();
 
-    private sealed class HistoryEntry(ClipboardHistoryItem item, string text)
+    private sealed class HistoryEntry(ClipboardHistoryItem item, string? text, BitmapSource? thumbnail)
     {
         public ClipboardHistoryItem Item { get; } = item;
-        public string Text { get; } = text;
+        public string? Text { get; } = text;
+        public BitmapSource? Thumbnail { get; } = thumbnail;
         public DateTimeOffset Timestamp => Item.Timestamp;
-        public string DisplayText => $"{Timestamp.LocalDateTime:g}  {MakePreview(Text)}";
+        public string? PreviewText { get; } = text is null ? null : MakePreview(text);
+        public bool HasFormatting { get; } =
+            item.Content.Contains(StandardDataFormats.Rtf) || item.Content.Contains(StandardDataFormats.Html);
 
         private static string MakePreview(string value)
         {
-            var preview = Regex.Replace(value, "\\s+", " ").Trim();
-            return preview.Length > 160 ? preview[..160] + "…" : preview;
+            // Keep line breaks so the card can show up to three lines; the view trims the rest.
+            var preview = value.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\t', ' ').Trim();
+            return preview.Length > 600 ? preview[..600] : preview;
         }
     }
 }

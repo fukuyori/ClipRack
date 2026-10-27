@@ -20,12 +20,13 @@ The app starts in the system tray. Open it from the tray icon or use the configu
 
 ## Features
 
-- View text items from Windows clipboard history
+- View Windows clipboard history as cards: text (including formatted text, shown as plain text) up to three lines, and image thumbnails
+- Paste a history item into the window that was active before ClipRack was shown, from a card's "⋯" button or context menu. Formatted text can be pasted with or without formatting. Pasting does not add, remove, or reorder Windows clipboard history items
 - Extract plain text from formatted text, HTML, and XML
 - Convert line endings to CRLF, LF, or CR
 - Automatically normalize plain-text-only clipboard content to CRLF; formatted, image, and unsupported clipboard data is left untouched
 - Collapse consecutive blank lines and replace text using literal strings or .NET regular expressions
-- Create, save, and run ordered text macros, including from a history item's context menu
+- Create, save, and run ordered text macros, including from a history card's "⋯" button or context menu (text items only)
 - Translate text with Ollama through `/api/generate`
 - Configure light/dark appearance, interface language, Windows sign-in startup, activation shortcut, and window placement
 - Keep the original history item; macro results are added as new clipboard items
