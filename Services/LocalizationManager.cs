@@ -101,6 +101,7 @@ public static class LocalizationManager
             , ["ClipboardSkip"] = ("Skipped newline normalization because formatted or unsupported data is present: {0}", "書式付きまたは未対応の形式を含むため、改行補正をスキップしました: {0}")
             , ["ClipboardAlreadyCrLf"] = ("Clipboard text already uses CRLF; no change was needed.", "クリップボードのテキストはCRLFです。改行補正は不要でした。")
             , ["ClipboardNormalized"] = ("Normalized clipboard text line endings to CRLF.", "クリップボードのテキスト改行をCRLFに補正しました。")
+            , ["ClipboardOriginalKept"] = ("Normalized the line endings, but could not remove the original text from clipboard history.", "改行を補正しましたが、補正前の文をクリップボード履歴から削除できませんでした。")
             , ["ClipboardNormalizeError"] = ("Could not normalize clipboard line endings. It will be checked again after the next update.", "クリップボードの改行を自動補正できませんでした。次の更新時に再確認します。")
             , ["ClipboardListenerError"] = ("Could not start clipboard monitoring: {0}", "クリップボード監視を開始できませんでした: {0}")
             , ["ShortcutInitError"] = ("Could not initialize the shortcut feature.", "ショートカットキー機能を初期化できませんでした。")

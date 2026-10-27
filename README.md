@@ -58,7 +58,7 @@ Outputs are written to `artifacts\publish\win-x64` and `installer_output`. See [
 - Translation is a standalone feature and is not available as a macro step.
 - HTML/XML conversion may not preserve semantic spacing or line breaks in complex documents.
 - Confirm that converted results appear in Windows clipboard history from the History tab.
-- Automatic newline normalization occurs after a clipboard update, so both the original and normalized text can appear in Windows history.
+- Automatic newline normalization occurs after a clipboard update. After the normalized text is added, ClipRack removes the original text from Windows history; if the original cannot be found or removed, both items remain.
 - Windows clipboard-history behavior and Ollama connectivity have not yet been manually verified on a target system.
 
 See [README.ja.md](README.ja.md) for the Japanese version.
